@@ -117,8 +117,7 @@ export default function RegisterPage() {
                 value={formData.role}
                 onChange={(e) => setFormData({...formData, role: e.target.value})}
               >
-                <option value="user">User</option>
-                <option value="admin">Admin</option>
+                <option value="user">user</option>
               </select>
             </div>
           </div>
