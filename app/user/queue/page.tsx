@@ -1,194 +1,141 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation'; // Tambahkan ini
+import { useState, useEffect, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import api from '@/lib/axios';
-import { Ticket, Download, Loader2, LogOut } from 'lucide-react'; // Tambahkan LogOut
+import { Ticket, Download, Loader2, LogOut, Bell, Users, Clock } from 'lucide-react';
+import { createClient } from '@supabase/supabase-js';
 
 interface Service {
   id: string;
   name: string;
   code: string;
-  description: string;
 }
 
-interface QueueResponse {
+interface Queue {
   id: string;
   display_num: string;
   status: string;
 }
 
+// Pastikan variabel ini ada di .env.local kamu
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
+
 export default function UserQueuePage() {
   const [services, setServices] = useState<Service[]>([]);
   const [loading, setLoading] = useState(true);
   const [booking, setBooking] = useState(false);
-  const [downloading, setDownloading] = useState(false);
-  const [myQueue, setMyQueue] = useState<QueueResponse | null>(null);
-  const router = useRouter(); // Inisialisasi router
+  const [myQueue, setMyQueue] = useState<Queue | null>(null);
+  const [currentNumber, setCurrentNumber] = useState<string>("-");
+  const router = useRouter();
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  // 1. Ambil daftar layanan saat halaman dimuat
   useEffect(() => {
-    const fetchServices = async () => {
-      try {
-        const response = await api.get('/services');
-        setServices(response.data.data || []);
-      } catch (err) {
-        console.error('Gagal mengambil layanan', err);
-      } finally {
-        setLoading(false);
-      }
-    };
+    audioRef.current = new Audio('/ping.mp3'); // Simpan file suara di /public/ping.mp3
     fetchServices();
-  }, []);
 
-  // Fungsi Logout
-  const handleLogout = () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('role');
-    router.push('/login');
+    // REAL-TIME: Dengar perubahan pada tabel 'queues' di Supabase
+    const channel = supabase
+      .channel('public:queues')
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'queues' }, (payload) => {
+        const updatedData = payload.new;
+        
+        // Update nomor yang sedang dipanggil jika statusnya 'called'
+        if (updatedData.status === 'called') {
+          setCurrentNumber(updatedData.display_num);
+          
+          // Jika ID antrian yang diupdate adalah milik user ini
+          if (myQueue && updatedData.id === myQueue.id) {
+            playNotif();
+            alert("Nomor Anda sedang dipanggil! Silakan menuju loket.");
+          }
+        }
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [myQueue]);
+
+  const fetchServices = async () => {
+    try {
+      const res = await api.get('/services');
+      setServices(res.data.data || []);
+    } catch (err) {
+      console.error('Gagal ambil layanan', err);
+    } finally { setLoading(false); }
   };
 
-  // 2. Fungsi untuk mengambil nomor antrian
-  const handleTakeQueue = async (serviceId: string) => {
+  const playNotif = () => audioRef.current?.play().catch(() => {});
+
+  const handleTakeQueue = async (id: string) => {
     setBooking(true);
     try {
-      const response = await api.post('/queues', { service_id: serviceId });
-      setMyQueue(response.data.data);
+      const res = await api.post('/queues', { service_id: id });
+      setMyQueue(res.data.data);
     } catch (err) {
-      alert('Gagal mengambil antrian. Silakan coba lagi.');
-    } finally {
-      setBooking(false);
-    }
+      alert("Gagal mengambil antrian.");
+    } finally { setBooking(false); }
   };
 
-  // 3. Fungsi untuk download struk PDF
-  const handleDownloadTicket = async () => {
-    if (!myQueue) return;
-
-    setDownloading(true);
-    try {
-      const response = await api.get(`/queues/download/${myQueue.id}`, {
-        responseType: 'blob',
-      });
-
-      const blob = new Blob([response.data], { type: 'application/pdf' });
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', `tiket-${myQueue.display_num}.pdf`);
-      
-      document.body.appendChild(link);
-      link.click();
-      
-      link.parentNode?.removeChild(link);
-      window.URL.revokeObjectURL(url);
-    } catch (err) {
-      console.error("Gagal download PDF:", err);
-      alert("Gagal mengunduh tiket. Cek koneksi server atau status login Anda.");
-    } finally {
-      setDownloading(false);
-    }
-  };
-
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <Loader2 className="animate-spin text-blue-600" size={48} />
-      </div>
-    );
-  }
+  if (loading) return <div className="min-h-screen flex items-center justify-center bg-gray-900"><Loader2 className="animate-spin text-blue-500" /></div>;
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header/Navbar Baru */}
-      <nav className="bg-white shadow-sm px-4 sm:px-8 py-4 flex justify-between items-center mb-8">
+    <div className="min-h-screen bg-gray-950 text-white font-sans">
+      {/* Top Navbar */}
+      <nav className="p-4 border-b border-gray-800 flex justify-between items-center bg-gray-900/50 backdrop-blur-md sticky top-0 z-50">
         <div className="flex items-center gap-2">
-          <div className="bg-blue-600 p-2 rounded-lg text-white">
-            <Ticket size={20} />
-          </div>
-          <span className="font-bold text-gray-800 text-lg hidden sm:inline">SMALD</span>
+          <div className="bg-blue-600 p-2 rounded-lg"><Ticket size={20} /></div>
+          <span className="font-bold">ANTRIAN<span className="text-blue-500">DIGITAL</span></span>
         </div>
-        <button 
-          onClick={handleLogout}
-          className="flex items-center gap-2 text-red-600 hover:text-red-700 font-semibold px-4 py-2 rounded-lg hover:bg-red-50 transition"
-        >
-          <LogOut size={18} /> Logout
+        <button onClick={() => {localStorage.clear(); router.push('/login');}} className="text-gray-400 hover:text-red-500 text-sm flex items-center gap-2">
+          <LogOut size={16} /> Logout
         </button>
       </nav>
 
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 pb-12">
-        <div className="text-center mb-12">
-          <h1 className="text-4xl font-bold text-gray-900">Ambil Nomor Antrian</h1>
-          <p className="mt-4 text-lg text-gray-600">Silakan pilih layanan yang Anda tuju</p>
+      <main className="max-w-2xl mx-auto p-6">
+        {/* DASHBOARD REAL-TIME */}
+        <div className="bg-gradient-to-br from-blue-700 to-blue-900 rounded-3xl p-8 mb-8 shadow-2xl relative overflow-hidden group">
+           <div className="relative z-10 flex justify-between items-center">
+              <div>
+                 <p className="text-blue-200 text-xs font-bold uppercase tracking-widest mb-1">Sekarang Dipanggil</p>
+                 <h2 className="text-7xl font-black text-white tracking-tighter">{currentNumber}</h2>
+              </div>
+              <div className="text-right">
+                 <p className="text-blue-200 text-xs font-bold uppercase tracking-widest mb-1">Nomor Anda</p>
+                 <h2 className="text-5xl font-black text-white/50">{myQueue ? myQueue.display_num : '--'}</h2>
+              </div>
+           </div>
+           
+           <div className="mt-8 pt-6 border-t border-white/10 flex justify-between text-xs text-blue-100 font-medium">
+              <span className="flex items-center gap-2"><Users size={14}/> Sisa Antrian: 4 Orang</span>
+              <span className="flex items-center gap-2"><Clock size={14}/> Estimasi: 15 Menit</span>
+           </div>
         </div>
 
-        {/* Modal Sukses Ambil Antrian */}
-        {myQueue && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-            <div className="bg-white rounded-2xl p-8 max-w-sm w-full text-center shadow-2xl">
-              <div className="bg-green-100 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
-                <Ticket className="text-green-600" size={32} />
-              </div>
-              <h2 className="text-2xl font-bold text-gray-800">Antrian Anda</h2>
-              <div className="my-6">
-                <span className="text-6xl font-black text-blue-600 tracking-tighter">
-                  {myQueue.display_num}
-                </span>
-              </div>
-              <p className="text-gray-500 mb-6">Simpan nomor ini atau download struk PDF untuk bukti.</p>
-              <div className="space-y-3">
-                <button
-                  onClick={handleDownloadTicket}
-                  disabled={downloading}
-                  className={`w-full flex items-center justify-center gap-2 text-white py-3 rounded-xl font-semibold transition ${
-                    downloading ? 'bg-blue-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'
-                  }`}
-                >
-                  {downloading ? (
-                    <><Loader2 className="animate-spin" size={20} /> Memproses...</>
-                  ) : (
-                    <><Download size={20} /> Download PDF</>
-                  )}
-                </button>
-                <button
-                  onClick={() => setMyQueue(null)}
-                  className="w-full text-gray-500 font-medium hover:text-gray-700 disabled:opacity-50"
-                  disabled={downloading}
-                >
-                  Tutup
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Daftar Layanan */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {services
-          .sort((a, b) => a.code.localeCompare(b.code)) 
-          .map((service) => (
-            <div
-              key={service.id}
-              className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 hover:shadow-md transition group"
+        {/* LIST LAYANAN */}
+        <h3 className="text-xl font-bold mb-4 flex items-center gap-2"><Bell className="text-blue-500" size={20}/> Pilih Layanan</h3>
+        <div className="grid grid-cols-1 gap-3">
+          {services.map((s) => (
+            <button 
+              key={s.id} 
+              onClick={() => handleTakeQueue(s.id)}
+              disabled={booking}
+              className="bg-gray-900 border border-gray-800 p-5 rounded-2xl flex justify-between items-center hover:border-blue-500/50 hover:bg-gray-800 transition-all group"
             >
-              <div className="flex justify-between items-start mb-4">
-                <div className="bg-blue-50 text-blue-700 font-bold px-3 py-1 rounded-lg">
-                  Kode: {service.code}
-                </div>
+              <div className="text-left">
+                <span className="text-[10px] bg-gray-800 text-gray-400 px-2 py-0.5 rounded border border-gray-700 mb-2 inline-block">{s.code}</span>
+                <h4 className="font-bold text-gray-200 group-hover:text-white">{s.name}</h4>
               </div>
-              <h3 className="text-xl font-bold text-gray-900 mb-2">{service.name}</h3>
-              <p className="text-gray-500 text-sm mb-6 line-clamp-2">{service.description}</p>
-              <button
-                disabled={booking}
-                onClick={() => handleTakeQueue(service.id)}
-                className="w-full bg-gray-900 text-white py-3 rounded-xl font-semibold group-hover:bg-blue-600 transition-colors disabled:bg-gray-400"
-              >
-                {booking ? 'Memproses...' : 'Pilih Layanan'}
-              </button>
-            </div>
+              <div className="bg-gray-800 p-3 rounded-xl group-hover:bg-blue-600 transition-colors">
+                {booking ? <Loader2 className="animate-spin" size={20}/> : <Ticket size={20}/>}
+              </div>
+            </button>
           ))}
         </div>
-      </div>
+      </main>
     </div>
   );
 }
